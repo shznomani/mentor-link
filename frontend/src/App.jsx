@@ -1,23 +1,20 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { api } from './api.js';
 import { ArrowDownRight, ArrowRight, ArrowUpRight, Bookmark, Check, ChevronDown, CircleHelp, Compass, GraduationCap, LockKeyhole, Menu, MessageCircle, Search, ShieldCheck, Sparkles, Users, X } from 'lucide-react';
 
-const mentors = [
-  { id: 1, name: 'Ananya Rao', initials: 'AR', year: '4th year', branch: 'CSE', avatar: 'coral', topics: ['Internships', 'Frontend', 'React', 'Resume review'], about: 'Frontend engineer intern @ Razorpay. Happy to help you land your first opportunity and build a portfolio that feels like you.', sessions: 18, featured: true, availability: 'Open to requests', cgpa: '8.8 demo' },
-  { id: 2, name: 'Rohan Kulkarni', initials: 'RK', year: '4th year', branch: 'ISE', avatar: 'blue', topics: ['Hackathons', 'Product design', 'Startups'], about: 'Two-time hackathon finalist who loves turning a rough idea into a demo people remember.', sessions: 12, availability: 'Limited slots this week', cgpa: '8.5 demo' },
-  { id: 3, name: 'Meera Shetty', initials: 'MS', year: '3rd year', branch: 'CSE', avatar: 'lilac', topics: ['Electives', 'Machine learning', 'Research'], about: 'Research assistant exploring applied ML. Let’s map your interests to electives and a project you’ll be proud of.', sessions: 9, availability: 'Open to requests', cgpa: null },
-  { id: 4, name: 'Aditya Hegde', initials: 'AH', year: '4th year', branch: 'ECE', avatar: 'mint', topics: ['Internships', 'Interview prep', 'DSA'], about: 'Software intern @ Cisco. I can help with interview practice, DSA plans, and figuring out where to begin.', sessions: 21, availability: 'Open to requests', cgpa: '8.2 demo' },
-  { id: 5, name: 'Nisha Pai', initials: 'NP', year: '3rd year', branch: 'ISE', avatar: 'peach', topics: ['UI/UX', 'Portfolio', 'Hackathons'], about: 'Designer and builder. I’m happy to review a project, talk through a design portfolio, or brainstorm your next hack.', sessions: 7, availability: 'Taking a few requests', cgpa: null },
-  { id: 6, name: 'Karthik M', initials: 'KM', year: '4th year', branch: 'CSE', avatar: 'slate', topics: ['Open source', 'Git & GitHub', 'Internships'], about: 'Open-source contributor who enjoys making the first PR feel a lot less intimidating.', sessions: 15, availability: 'At capacity this week', cgpa: '8.6 demo' },
-];
+const DEMO_JUNIOR_ID = 7; // seeded demo account, see backend/app.py
 const topics = ['All topics', 'Internships', 'Hackathons', 'Electives', 'Frontend', 'Machine learning', 'UI/UX'];
 const interestOptions = ['Internships', 'Hackathons', 'Electives', 'Frontend', 'React', 'Machine learning', 'UI/UX', 'DSA'];
 function App() {
   const [query, setQuery] = useState('');
   const [topic, setTopic] = useState('All topics');
-  const [requests, setRequests] = useState(() => JSON.parse(localStorage.getItem('mentor-link-requests') || '[]'));
+  const [mentors, setMentors] = useState([]);
+  const [requests, setRequests] = useState([]);
   const [saved, setSaved] = useState(() => JSON.parse(localStorage.getItem('mentor-link-saved') || '[]'));
   const [view, setView] = useState('discover');
   const [demoRole, setDemoRole] = useState('junior');
+  const [demoMentorId, setDemoMentorId] = useState(1);
+  const [tried, setTried] = useState('');
   const [selected, setSelected] = useState(null);
   const [note, setNote] = useState('');
   const [toast, setToast] = useState('');
@@ -28,24 +25,53 @@ function App() {
   const filtered = useMemo(() => mentors.filter(m => {
     const text = `${m.name} ${m.branch} ${m.topics.join(' ')} ${m.about}`.toLowerCase();
     return (!query || text.includes(query.toLowerCase())) && (topic === 'All topics' || m.topics.includes(topic));
-  }), [query, topic]);
+  }), [mentors, query, topic]);
   const connectMatches = useMemo(() => mentors
     .filter(m => (!connectInterests.length || connectInterests.some(i => m.topics.includes(i))) && (!connectSkill.trim() || `${m.topics.join(' ')} ${m.about}`.toLowerCase().includes(connectSkill.trim().toLowerCase())))
     .sort((a, b) => {
       const score = m => connectInterests.filter(i => m.topics.includes(i)).length;
       return score(b) - score(a) || Number(Boolean(b.featured)) - Number(Boolean(a.featured));
-    }), [connectInterests, connectSkill]);
-  const persistRequests = (next) => { setRequests(next); localStorage.setItem('mentor-link-requests', JSON.stringify(next)); };
+    }), [mentors, connectInterests, connectSkill]);
   const showToast = (msg) => { setToast(msg); setTimeout(() => setToast(''), 2600); };
   const toggleSave = (id) => { const next = saved.includes(id) ? saved.filter(x => x !== id) : [...saved, id]; setSaved(next); localStorage.setItem('mentor-link-saved', JSON.stringify(next)); };
-  const sendRequest = () => {
+  const loadMentors = async () => { try { setMentors(await api.mentors()); } catch (e) { showToast(e.message); } };
+  const loadRequests = async () => { try { setRequests(await api.requests()); } catch (e) { showToast(e.message); } };
+  useEffect(() => { loadMentors(); }, []);
+  // Sign in as the demo account for the chosen role, then load THAT person's requests from the server.
+  useEffect(() => {
+    let current = true;
+    (async () => {
+      try {
+        await api.demoLogin(demoRole === 'junior' ? DEMO_JUNIOR_ID : demoMentorId);
+        const list = await api.requests();
+        if (current) setRequests(list);
+      } catch (e) { if (current) showToast(e.message); }
+    })();
+    return () => { current = false; };
+  }, [demoRole, demoMentorId]);
+  const sendRequest = async () => {
     if (!selected) return;
-    if (requests.some(r => r.mentorId === selected.id)) { setSelected(null); showToast('You already have a request with this mentor.'); return; }
     const requestTopic = connectSkill.trim() || connectInterests.find(i => selected.topics.includes(i)) || selected.topics[0];
-    persistRequests([{ mentorId: selected.id, status: 'pending', note: note.trim(), topic: requestTopic, createdAt: Date.now() }, ...requests]);
-    setSelected(null); setNote(''); setView('requests'); showToast('Request sent. Your contact stays private for now.');
+    try {
+      await api.createRequest({ mentor_id: selected.id, topic: requestTopic, message: note.trim(), tried: tried.trim() });
+      await loadRequests();
+      setSelected(null); setNote(''); setTried(''); setView('requests'); showToast('Request sent. Your contact stays private for now.');
+    } catch (e) { setSelected(null); showToast(e.message); }
   };
-  const updateRequest = (id, status) => persistRequests(requests.map(r => r.mentorId === id ? { ...r, status } : r));
+  const updateRequest = async (id, decision) => {
+    try {
+      await api.decide(id, decision);
+      await Promise.all([loadRequests(), loadMentors()]);
+      showToast(decision === 'accept' ? 'Accepted. Both contacts are now unlocked.' : 'Request declined.');
+    } catch (e) { showToast(e.message); }
+  };
+  const currentMentor = mentors.find(m => m.id === demoMentorId);
+  const toggleBusy = async () => {
+    try { await api.setBusy(!(currentMentor && currentMentor.busy)); await loadMentors(); } catch (e) { showToast(e.message); }
+  };
+  const resetDemo = async () => {
+    try { await api.reset(); setRequests([]); await Promise.all([loadMentors(), loadRequests()]); showToast('Demo data reset.'); } catch (e) { showToast(e.message); }
+  };
 
   return <div className="app-shell">
     <header className="topbar">
@@ -55,7 +81,7 @@ function App() {
         <button className={view === 'connect' ? 'nav-item active' : 'nav-item'} onClick={() => { setView('connect'); setMobileNav(false); }}>Connect</button>
         <button className={view === 'requests' ? 'nav-item active' : 'nav-item'} onClick={() => { setView('requests'); setMobileNav(false); }}>My requests <span className="nav-count">{requests.length}</span></button>
       </nav>
-      <div className="top-actions"><span className="privacy-chip"><ShieldCheck size={14}/> Private by design</span><button className="role-switch" onClick={() => { setDemoRole(demoRole === 'junior' ? 'mentor' : 'junior'); setView('requests'); }}>{demoRole === 'junior' ? 'Junior demo' : 'Mentor demo'} <ChevronDown size={13}/></button><button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="Toggle navigation">{mobileNav ? <X/> : <Menu/>}</button></div>
+      <div className="top-actions"><span className="privacy-chip"><ShieldCheck size={14}/> Private by design</span><button className="role-switch" onClick={() => { setRequests([]); setDemoRole(demoRole === 'junior' ? 'mentor' : 'junior'); setView('requests'); }}>{demoRole === 'junior' ? 'Junior demo' : 'Mentor demo'} <ChevronDown size={13}/></button><button className="mobile-menu" onClick={() => setMobileNav(!mobileNav)} aria-label="Toggle navigation">{mobileNav ? <X/> : <Menu/>}</button></div>
     </header>
 
     <main id="home" hidden={view === 'connect' || view === 'requests'}>
@@ -112,11 +138,11 @@ function App() {
       <div className="connect-privacy"><LockKeyhole size={16}/> Your contact details stay private until a mentor accepts your request.</div>
     </section>}
 
-    {view === 'requests' && <div className="requests-panel"><div className="requests-head"><div><button className="back-link" onClick={() => setView('discover')}><ArrowRight className="back-arrow" size={15}/> Back to mentors</button><div className="eyebrow"><span className="eyebrow-line"></span> {demoRole === 'junior' ? 'Your next conversation' : 'Your mentoring inbox'}</div><h2>{demoRole === 'junior' ? <>My <em>requests.</em></> : <>Incoming <em>requests.</em></>}</h2><p>{demoRole === 'junior' ? 'Your contact details stay private until a mentor accepts.' : 'Review a request. Contact details stay hidden until you accept.'}</p></div><div className="request-private"><LockKeyhole size={17}/><span>Contact details hidden<br/><small>until a mentor accepts</small></span></div></div>
-      {requests.length === 0 ? <div className="empty-state request-empty"><MessageCircle size={24}/><strong>{demoRole === 'junior' ? 'Your next conversation is out there.' : 'No requests waiting just yet.'}</strong><span>{demoRole === 'junior' ? 'Explore mentors and send your first request.' : 'New mentee requests will show up here.'}</span><button onClick={() => {setDemoRole('junior');setView('connect')}}>{demoRole === 'junior' ? <>Find a mentor <ArrowRight size={15}/></> : 'Back to discovery'}</button></div> : <div className="request-list">{requests.map(r => {const m = mentors.find(x => x.id === r.mentorId); if (!m) return null; return <article className="request-card" key={r.mentorId}><div className={`mentor-avatar small ${m.avatar}`}><span>{m.initials}</span></div><div className="request-info"><strong>{demoRole === 'junior' ? m.name : 'NIE junior'}</strong><span>{demoRole === 'junior' ? `${m.year} · ${m.branch} · ${r.topic || m.topics[0]}` : `Request topic: ${r.topic || m.topics[0]} · review whether it fits what you can help with`}</span>{r.note && <p>“{r.note}”</p>}</div><div className={`status-pill ${r.status}`}><span></span>{r.status === 'accepted' ? 'Accepted' : r.status === 'declined' ? 'Not available' : 'Awaiting reply'}</div>{demoRole === 'mentor' && r.status === 'pending' ? <div className="request-actions"><button className="demo-accept" onClick={() => updateRequest(m.id, 'accepted')}><Check size={14}/> Accept</button><button className="demo-decline" onClick={() => updateRequest(m.id, 'declined')}>Decline</button></div> : demoRole === 'junior' && r.status === 'accepted' ? <div className="unlocked"><ShieldCheck size={15}/> You’re connected!<small>Senior demo: {m.name.toLowerCase().replace(' ', '.')}@nie.edu</small></div> : demoRole === 'mentor' && r.status === 'accepted' ? <div className="unlocked"><ShieldCheck size={15}/> You’re connected!<small>Junior demo: junior.demo@nie.edu</small></div> : null}</article>;})}</div>}
+    {view === 'requests' && <div className="requests-panel"><div className="requests-head"><div><button className="back-link" onClick={() => setView('discover')}><ArrowRight className="back-arrow" size={15}/> Back to mentors</button><div className="eyebrow"><span className="eyebrow-line"></span> {demoRole === 'junior' ? 'Your next conversation' : 'Your mentoring inbox'}</div><h2>{demoRole === 'junior' ? <>My <em>requests.</em></> : <>Incoming <em>requests.</em></>}</h2><p>{demoRole === 'junior' ? 'Your contact details stay private until a mentor accepts.' : 'Review a request. Contact details stay hidden until you accept.'}</p><div style={{display:'flex',alignItems:'center',gap:'14px',flexWrap:'wrap',marginTop:'14px',fontSize:'11px',color:'#79877b'}}>{demoRole === 'mentor' && <label>Demo mentor: <select value={demoMentorId} onChange={e => { setRequests([]); setDemoMentorId(Number(e.target.value)); }}>{mentors.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></label>}{demoRole === 'mentor' && <button className="clear-interests" onClick={toggleBusy}>{currentMentor && currentMentor.busy ? 'Turn off busy mode' : 'Turn on busy mode'}</button>}<button className="clear-interests" onClick={resetDemo}>Reset demo data</button></div></div><div className="request-private"><LockKeyhole size={17}/><span>Contact details hidden<br/><small>until a mentor accepts</small></span></div></div>
+      {requests.length === 0 ? <div className="empty-state request-empty"><MessageCircle size={24}/><strong>{demoRole === 'junior' ? 'Your next conversation is out there.' : 'No requests waiting just yet.'}</strong><span>{demoRole === 'junior' ? 'Explore mentors and send your first request.' : 'New mentee requests will show up here.'}</span><button onClick={() => {setDemoRole('junior');setView('connect')}}>{demoRole === 'junior' ? <>Find a mentor <ArrowRight size={15}/></> : 'Back to discovery'}</button></div> : <div className="request-list">{requests.map(r => {const isJunior = Boolean(r.mentor); const who = isJunior ? r.mentor : r.junior; return <article className="request-card" key={r.id}><div className={`mentor-avatar small ${isJunior ? r.mentor.avatar : 'slate'}`}><span>{who.initials}</span></div><div className="request-info"><strong>{isJunior ? r.mentor.name : 'NIE junior'}</strong><span>{isJunior ? `${r.mentor.year} · ${r.mentor.branch} · ${r.topic}` : `${r.junior.year} · ${r.junior.branch} · Request topic: ${r.topic}`}</span>{r.note && <p>“{r.note}”</p>}{r.tried && <p>Already tried: “{r.tried}”</p>}</div><div className={`status-pill ${r.status}`}><span></span>{r.status === 'accepted' ? 'Accepted' : r.status === 'declined' ? 'Not available' : 'Awaiting reply'}</div>{!isJunior && r.status === 'pending' ? <div className="request-actions"><button className="demo-accept" onClick={() => updateRequest(r.id, 'accept')}><Check size={14}/> Accept</button><button className="demo-decline" onClick={() => updateRequest(r.id, 'decline')}>Decline</button></div> : r.contact ? <div className="unlocked"><ShieldCheck size={15}/> You’re connected!<small>Mentor: {r.contact.mentorEmail}</small><small>Junior: {r.contact.juniorEmail}</small></div> : null}</article>;})}</div>}
     </div>}
 
-    {selected && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSelected(null); }}><section className="request-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close"><X size={18}/></button><div className={`mentor-avatar modal-avatar ${selected.avatar}`}><span>{selected.initials}</span></div><div className="eyebrow"><span className="eyebrow-line"></span> Start with a hello</div><h2 id="modal-title">Ask <em>{selected.name.split(' ')[0]}.</em></h2><p className="modal-intro">Tell them what’s on your mind. A little context makes it easier to say yes.</p><label className="note-label" htmlFor="request-note">What would you like to talk about? <span>optional</span></label><textarea id="request-note" maxLength={240} placeholder="I’d love some advice on…" value={note} onChange={e => setNote(e.target.value)} /><div className="char-count">{note.length}/240</div><div className="modal-privacy"><LockKeyhole size={16}/><span>Your phone and email are never shown. Contact is shared only if {selected.name.split(' ')[0]} accepts.</span></div><button className="send-request" onClick={sendRequest}>Send a request <ArrowRight size={16}/></button><button className="maybe-later" onClick={() => setSelected(null)}>Maybe later</button></section></div>}
+    {selected && <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) setSelected(null); }}><section className="request-modal" role="dialog" aria-modal="true" aria-labelledby="modal-title"><button className="modal-close" onClick={() => setSelected(null)} aria-label="Close"><X size={18}/></button><div className={`mentor-avatar modal-avatar ${selected.avatar}`}><span>{selected.initials}</span></div><div className="eyebrow"><span className="eyebrow-line"></span> Start with a hello</div><h2 id="modal-title">Ask <em>{selected.name.split(' ')[0]}.</em></h2><p className="modal-intro">Tell them what’s on your mind. A little context makes it easier to say yes.</p><label className="note-label" htmlFor="request-note">What would you like to talk about? <span>optional</span></label><textarea id="request-note" maxLength={240} placeholder="I’d love some advice on…" value={note} onChange={e => setNote(e.target.value)} /><div className="char-count">{note.length}/240</div><label className="note-label" htmlFor="request-tried">What have you already tried? <span>optional</span></label><textarea id="request-tried" maxLength={240} style={{height: 64}} placeholder="I’ve already looked at…" value={tried} onChange={e => setTried(e.target.value)} /><div className="modal-privacy"><LockKeyhole size={16}/><span>Your phone and email are never shown. Contact is shared only if {selected.name.split(' ')[0]} accepts.</span></div><button className="send-request" onClick={sendRequest}>Send a request <ArrowRight size={16}/></button><button className="maybe-later" onClick={() => setSelected(null)}>Maybe later</button></section></div>}
     {toast && <div className="toast"><Check size={16}/>{toast}</div>}
     <button className="help-fab" title="Privacy promise"><CircleHelp size={19}/></button>
   </div>;
